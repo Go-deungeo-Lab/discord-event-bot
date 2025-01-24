@@ -6,17 +6,17 @@ const client = new Client({
         GatewayIntentBits.Guilds,
         GatewayIntentBits.GuildScheduledEvents,
         GatewayIntentBits.MessageContent,
+        GatewayIntentBits.GuildMessages
     ]
 });
 
-const NOTIFICATION_CHANNEL_ID = process.env.YOUR_DISCORD_CHANNEL_ID;
-// 예정된 이벤트 알림을 저장할 Map
+// 서버별 설정을 저장할 Map
+const serverConfigs = new Map();
 const scheduledNotifications = new Map();
 
 client.once('ready', () => {
     console.log(`Logged in as ${client.user.tag}`);
-    console.log('Notification Channel ID:', NOTIFICATION_CHANNEL_ID);
-    console.log('Watching for events...');
+    console.log('Bot is ready to use!');
     checkUpcomingEvents();
 });
 
@@ -42,8 +42,11 @@ function checkUpcomingEvents() {
 }
 
 async function sendEventReminder(event, timeLeft) {
+    const channelId = serverConfigs.get(event.guildId);
+    if (!channelId) return;
+
     try {
-        const channel = await client.channels.fetch(NOTIFICATION_CHANNEL_ID);
+        const channel = await client.channels.fetch(channelId);
         const reminderEmbed = new EmbedBuilder()
             .setColor('#FF9300')
             .setTitle('⏰ 이벤트 시작 알림')
@@ -63,23 +66,72 @@ async function sendEventReminder(event, timeLeft) {
     }
 }
 
+// 채널 설정 명령어
+client.on('messageCreate', async message => {
+    if (!message.guild) return; // DM 무시
+
+    if (message.content.startsWith('!seteventchannel')) {
+        // 권한 체크
+        if (!message.member.permissions.has('ManageGuild')) {
+            return message.reply('이 명령어를 사용하려면 서버 관리 권한이 필요합니다.');
+        }
+
+        serverConfigs.set(message.guildId, message.channel.id);
+        message.reply({
+            embeds: [
+                new EmbedBuilder()
+                    .setColor('#00ff00')
+                    .setTitle('✅ 설정 완료')
+                    .setDescription('이벤트 알림 채널이 설정되었습니다!')
+                    .addFields(
+                        { name: '채널', value: `<#${message.channel.id}>` }
+                    )
+                    .setTimestamp()
+            ]
+        });
+    }
+
+    if (message.content === '!eventhelp') {
+        message.reply({
+            embeds: [
+                new EmbedBuilder()
+                    .setColor('#5865F2')
+                    .setTitle('📚 이벤트 봇 도움말')
+                    .setDescription('이벤트 알림 봇 사용 방법입니다.')
+                    .addFields(
+                        { name: '!seteventchannel', value: '현재 채널을 이벤트 알림 채널로 설정합니다.\n(서버 관리 권한 필요)', inline: false },
+                        { name: '자동 알림', value: '• 새 이벤트 생성 시 알림\n• 이벤트 시작 1시간 전 알림', inline: false }
+                    )
+                    .setFooter({ text: '추가 문의: 봇 개발자에게 문의하세요' })
+            ]
+        });
+    }
+});
+
 client.on(Events.GuildScheduledEventCreate, async scheduledEvent => {
-    console.log('New event detected:', scheduledEvent.name);
+    const guildId = scheduledEvent.guildId;
+    const channelId = serverConfigs.get(guildId);
+
+    if (!channelId) {
+        console.log(`No event channel set for guild ${guildId}`);
+        return;
+    }
+
     try {
-        const channel = await client.channels.fetch(NOTIFICATION_CHANNEL_ID);
+        const channel = await client.channels.fetch(channelId);
 
         const eventEmbed = new EmbedBuilder()
             .setColor('#5865F2')
             .setTitle('🎉 새로운 이벤트가 등록되었습니다!')
-            .setDescription(`# ${scheduledEvent.name}\n\n`) // 이벤트 이름을 더 크게
+            .setDescription(`# ${scheduledEvent.name}\n\n`)
             .addFields(
-                { name: '\u200B', value: '\u200B' }, // 빈 줄 추가
+                { name: '\u200B', value: '\u200B' },
                 {
                     name: '📅 시작 시간',
                     value: `<t:${Math.floor(scheduledEvent.scheduledStartTimestamp / 1000)}:F>\n(<t:${Math.floor(scheduledEvent.scheduledStartTimestamp / 1000)}:R>)`,
-                    inline: false // inline을 false로 변경
+                    inline: false
                 },
-                { name: '\u200B', value: '\u200B' } // 빈 줄 추가
+                { name: '\u200B', value: '\u200B' }
             );
 
         if (scheduledEvent.scheduledEndTimestamp) {
@@ -88,7 +140,7 @@ client.on(Events.GuildScheduledEventCreate, async scheduledEvent => {
                     value: `<t:${Math.floor(scheduledEvent.scheduledEndTimestamp / 1000)}:F>`,
                     inline: false
                 },
-                { name: '\u200B', value: '\u200B' }); // 빈 줄 추가
+                { name: '\u200B', value: '\u200B' });
         }
 
         if (scheduledEvent.description) {
@@ -97,7 +149,7 @@ client.on(Events.GuildScheduledEventCreate, async scheduledEvent => {
                     value: scheduledEvent.description,
                     inline: false
                 },
-                { name: '\u200B', value: '\u200B' }); // 빈 줄 추가
+                { name: '\u200B', value: '\u200B' });
         }
 
         if (scheduledEvent.entityMetadata?.location) {
@@ -106,7 +158,7 @@ client.on(Events.GuildScheduledEventCreate, async scheduledEvent => {
                     value: scheduledEvent.entityMetadata.location,
                     inline: false
                 },
-                { name: '\u200B', value: '\u200B' }); // 빈 줄 추가
+                { name: '\u200B', value: '\u200B' });
         }
 
         eventEmbed
@@ -122,7 +174,6 @@ client.on(Events.GuildScheduledEventCreate, async scheduledEvent => {
         // 1시간 전 알림을 위해 이벤트 저장
         scheduledNotifications.set(scheduledEvent.id, { oneHourNotified: false });
 
-        console.log('Event notification sent successfully!');
     } catch (error) {
         console.error('Error sending event notification:', error);
     }
