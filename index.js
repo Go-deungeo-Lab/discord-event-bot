@@ -31,7 +31,10 @@ async function checkExistingEvents() {
                 if (event.status !== 'COMPLETED' &&
                     timeUntilEvent > 900000 &&
                     !scheduledNotifications.has(event.id)) {
-                    scheduledNotifications.set(event.id, { thirtyMinNotified: false });
+                    scheduledNotifications.set(event.id, {
+                        fifteenMinNotified: false,
+                        fiveMinNotified: false
+                    });
                     console.log(`Added existing event: ${event.name}`);
 
                     const channelId = serverConfigs.get(event.guildId);
@@ -52,7 +55,10 @@ client.on('guildCreate', async guild => {
         if (event.status !== 'COMPLETED' &&
             event.scheduledStartTimestamp > Date.now() &&
             !scheduledNotifications.has(event.id)) {
-            scheduledNotifications.set(event.id, { thirtyMinNotified: false });
+            scheduledNotifications.set(event.id, {
+                fifteenMinNotified: false,
+                fiveMinNotified: false
+            });
         }
     });
 });
@@ -75,10 +81,17 @@ function checkUpcomingEvents() {
             }
 
             const timeUntilEvent = event.scheduledStartTimestamp - now;
-            // 15분으로 변경 (900000ms = 15분)
-            if (timeUntilEvent <= 900000 && timeUntilEvent > 840000 && !notified.thirtyMinNotified) {
+
+            // 15분 전 알림
+            if (timeUntilEvent <= 900000 && timeUntilEvent > 840000 && !notified.fifteenMinNotified) {
                 sendEventReminder(event, '15분');
-                notified.thirtyMinNotified = true;
+                notified.fifteenMinNotified = true;
+            }
+
+            // 5분 전 알림
+            if (timeUntilEvent <= 300000 && timeUntilEvent > 240000 && !notified.fiveMinNotified) {
+                sendEventReminder(event, '5분');
+                notified.fiveMinNotified = true;
             }
         });
     }, 60000);
@@ -169,7 +182,7 @@ client.on('messageCreate', async message => {
                     .setDescription('이벤트 알림 봇 사용 방법입니다.')
                     .addFields(
                         { name: '!seteventchannel', value: '현재 채널을 이벤트 알림 채널로 설정합니다.\n(서버 관리 권한 필요)', inline: false },
-                        { name: '자동 알림', value: '• 새 이벤트 생성 시 알림\n• 이벤트 시작 30분 전 알림', inline: false }
+                        { name: '자동 알림', value: '• 새 이벤트 생성 시 알림\n• 이벤트 시작 15분 전 알림\n• 이벤트 시작 5분 전 알림', inline: false }
                     )
                     .setFooter({ text: '추가 문의: 봇 개발자에게 문의하세요' })
             ]
@@ -240,7 +253,10 @@ client.on(Events.GuildScheduledEventCreate, async scheduledEvent => {
             embeds: [eventEmbed]
         });
 
-        scheduledNotifications.set(scheduledEvent.id, { thirtyMinNotified: false });
+        scheduledNotifications.set(scheduledEvent.id, {
+            fifteenMinNotified: false,
+            fiveMinNotified: false
+        });
 
     } catch (error) {
         console.error('Error sending event notification:', error);
