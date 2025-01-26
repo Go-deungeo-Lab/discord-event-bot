@@ -74,8 +74,9 @@ function checkUpcomingEvents() {
             }
 
             const timeUntilEvent = event.scheduledStartTimestamp - now;
-            if (timeUntilEvent <= 1800000 && timeUntilEvent > 1740000 && !notified.thirtyMinNotified) {
-                sendEventReminder(event, '30분');
+            // 15분으로 변경 (900000ms = 15분)
+            if (timeUntilEvent <= 900000 && timeUntilEvent > 840000 && !notified.thirtyMinNotified) {
+                sendEventReminder(event, '15분');
                 notified.thirtyMinNotified = true;
             }
         });
