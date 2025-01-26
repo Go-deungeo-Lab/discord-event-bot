@@ -23,12 +23,13 @@ client.once('ready', () => {
 async function checkExistingEvents() {
     try {
         console.log('Checking existing events...');
-        const guilds = await client.guilds.fetch();
-        for (const [, guild] of guilds) {
+        for (const [, guild] of client.guilds.cache) {
+            console.log(`Checking guild: ${guild.name}`);
             const events = await guild.scheduledEvents.fetch();
             events.forEach(event => {
+                const timeUntilEvent = event.scheduledStartTimestamp - Date.now();
                 if (event.status !== 'COMPLETED' &&
-                    event.scheduledStartTimestamp > Date.now() &&
+                    timeUntilEvent > 900000 &&
                     !scheduledNotifications.has(event.id)) {
                     scheduledNotifications.set(event.id, { thirtyMinNotified: false });
                     console.log(`Added existing event: ${event.name}`);
@@ -41,7 +42,7 @@ async function checkExistingEvents() {
             });
         }
     } catch (error) {
-        console.error('Error checking existing events:', error);
+        console.error('Error checking existing events:', error, error.stack);
     }
 }
 
