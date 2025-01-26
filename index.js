@@ -10,7 +10,6 @@ const client = new Client({
     ]
 });
 
-// 서버별 설정을 저장할 Map
 const serverConfigs = new Map();
 const scheduledNotifications = new Map();
 
@@ -18,27 +17,52 @@ client.once('ready', () => {
     console.log(`Logged in as ${client.user.tag}`);
     console.log('Bot is ready to use!');
     checkUpcomingEvents();
+    checkExistingEvents();
 });
 
-// 1시간 전 알림을 위한 주기적 체크
+// 기존 이벤트 체크
+async function checkExistingEvents() {
+    client.guilds.cache.forEach(async guild => {
+        const events = await guild.scheduledEvents.fetch();
+        events.forEach(event => {
+            scheduledNotifications.set(event.id, { thirtyMinNotified: false });
+        });
+    });
+}
+
+// 서버 참여시 기존 이벤트 체크
+client.on('guildCreate', async guild => {
+    const events = await guild.scheduledEvents.fetch();
+    events.forEach(event => {
+        scheduledNotifications.set(event.id, { thirtyMinNotified: false });
+    });
+});
+
 function checkUpcomingEvents() {
     setInterval(async () => {
         const now = Date.now();
         scheduledNotifications.forEach(async (notified, eventId) => {
-            const event = await client.guilds.cache.first()?.scheduledEvents.fetch(eventId).catch(() => null);
+            const guilds = client.guilds.cache;
+            let event = null;
+
+            for (const [, guild] of guilds) {
+                event = await guild.scheduledEvents.fetch(eventId).catch(() => null);
+                if (event) break;
+            }
+
             if (!event) {
                 scheduledNotifications.delete(eventId);
                 return;
             }
 
             const timeUntilEvent = event.scheduledStartTimestamp - now;
-            // 1시간 전 (허용 오차 1분)
-            if (timeUntilEvent <= 3600000 && timeUntilEvent > 3540000 && !notified.oneHourNotified) {
-                sendEventReminder(event, '1시간');
-                notified.oneHourNotified = true;
+            // 30분 전 (허용 오차 1분)
+            if (timeUntilEvent <= 1800000 && timeUntilEvent > 1740000 && !notified.thirtyMinNotified) {
+                sendEventReminder(event, '30분');
+                notified.thirtyMinNotified = true;
             }
         });
-    }, 60000); // 1분마다 체크
+    }, 60000);
 }
 
 async function sendEventReminder(event, timeLeft) {
@@ -66,12 +90,10 @@ async function sendEventReminder(event, timeLeft) {
     }
 }
 
-// 채널 설정 명령어
 client.on('messageCreate', async message => {
-    if (!message.guild) return; // DM 무시
+    if (!message.guild) return;
 
     if (message.content.startsWith('!seteventchannel')) {
-        // 권한 체크
         if (!message.member.permissions.has('ManageGuild')) {
             return message.reply('이 명령어를 사용하려면 서버 관리 권한이 필요합니다.');
         }
@@ -100,7 +122,7 @@ client.on('messageCreate', async message => {
                     .setDescription('이벤트 알림 봇 사용 방법입니다.')
                     .addFields(
                         { name: '!seteventchannel', value: '현재 채널을 이벤트 알림 채널로 설정합니다.\n(서버 관리 권한 필요)', inline: false },
-                        { name: '자동 알림', value: '• 새 이벤트 생성 시 알림\n• 이벤트 시작 1시간 전 알림', inline: false }
+                        { name: '자동 알림', value: '• 새 이벤트 생성 시 알림\n• 이벤트 시작 30분 전 알림', inline: false }
                     )
                     .setFooter({ text: '추가 문의: 봇 개발자에게 문의하세요' })
             ]
@@ -171,8 +193,7 @@ client.on(Events.GuildScheduledEventCreate, async scheduledEvent => {
             embeds: [eventEmbed]
         });
 
-        // 1시간 전 알림을 위해 이벤트 저장
-        scheduledNotifications.set(scheduledEvent.id, { oneHourNotified: false });
+        scheduledNotifications.set(scheduledEvent.id, { thirtyMinNotified: false });
 
     } catch (error) {
         console.error('Error sending event notification:', error);
