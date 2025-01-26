@@ -16,25 +16,43 @@ const scheduledNotifications = new Map();
 client.once('ready', () => {
     console.log(`Logged in as ${client.user.tag}`);
     console.log('Bot is ready to use!');
-    checkUpcomingEvents();
     checkExistingEvents();
+    checkUpcomingEvents();
 });
 
-// 기존 이벤트 체크
 async function checkExistingEvents() {
-    client.guilds.cache.forEach(async guild => {
-        const events = await guild.scheduledEvents.fetch();
-        events.forEach(event => {
-            scheduledNotifications.set(event.id, { thirtyMinNotified: false });
-        });
-    });
+    try {
+        console.log('Checking existing events...');
+        const guilds = await client.guilds.fetch();
+        for (const [, guild] of guilds) {
+            const events = await guild.scheduledEvents.fetch();
+            events.forEach(event => {
+                if (event.status !== 'COMPLETED' &&
+                    event.scheduledStartTimestamp > Date.now() &&
+                    !scheduledNotifications.has(event.id)) {
+                    scheduledNotifications.set(event.id, { thirtyMinNotified: false });
+                    console.log(`Added existing event: ${event.name}`);
+
+                    const channelId = serverConfigs.get(event.guildId);
+                    if (channelId) {
+                        sendEventNotification(event, channelId);
+                    }
+                }
+            });
+        }
+    } catch (error) {
+        console.error('Error checking existing events:', error);
+    }
 }
 
-// 서버 참여시 기존 이벤트 체크
 client.on('guildCreate', async guild => {
     const events = await guild.scheduledEvents.fetch();
     events.forEach(event => {
-        scheduledNotifications.set(event.id, { thirtyMinNotified: false });
+        if (event.status !== 'COMPLETED' &&
+            event.scheduledStartTimestamp > Date.now() &&
+            !scheduledNotifications.has(event.id)) {
+            scheduledNotifications.set(event.id, { thirtyMinNotified: false });
+        }
     });
 });
 
@@ -56,7 +74,6 @@ function checkUpcomingEvents() {
             }
 
             const timeUntilEvent = event.scheduledStartTimestamp - now;
-            // 30분 전 (허용 오차 1분)
             if (timeUntilEvent <= 1800000 && timeUntilEvent > 1740000 && !notified.thirtyMinNotified) {
                 sendEventReminder(event, '30분');
                 notified.thirtyMinNotified = true;
@@ -87,6 +104,34 @@ async function sendEventReminder(event, timeLeft) {
         });
     } catch (error) {
         console.error('Error sending event reminder:', error);
+    }
+}
+
+async function sendEventNotification(event, channelId) {
+    try {
+        const channel = await client.channels.fetch(channelId);
+        const eventEmbed = new EmbedBuilder()
+            .setColor('#5865F2')
+            .setTitle('🎉 기존 이벤트 알림')
+            .setDescription(`# ${event.name}\n\n`)
+            .addFields(
+                { name: '\u200B', value: '\u200B' },
+                {
+                    name: '📅 시작 시간',
+                    value: `<t:${Math.floor(event.scheduledStartTimestamp / 1000)}:F>\n(<t:${Math.floor(event.scheduledStartTimestamp / 1000)}:R>)`,
+                    inline: false
+                }
+            )
+            .setURL(`https://discord.com/events/${event.guildId}/${event.id}`)
+            .setFooter({ text: '이벤트에 참여하시려면 위 제목을 클릭하세요!' })
+            .setTimestamp();
+
+        await channel.send({
+            content: '기존 이벤트 알림입니다 @everyone',
+            embeds: [eventEmbed]
+        });
+    } catch (error) {
+        console.error('Error sending existing event notification:', error);
     }
 }
 
