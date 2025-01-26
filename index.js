@@ -82,13 +82,11 @@ function checkUpcomingEvents() {
 
             const timeUntilEvent = event.scheduledStartTimestamp - now;
 
-            // 15분 전 알림
             if (timeUntilEvent <= 900000 && timeUntilEvent > 840000 && !notified.fifteenMinNotified) {
                 sendEventReminder(event, '15분');
                 notified.fifteenMinNotified = true;
             }
 
-            // 5분 전 알림
             if (timeUntilEvent <= 300000 && timeUntilEvent > 240000 && !notified.fiveMinNotified) {
                 sendEventReminder(event, '5분');
                 notified.fiveMinNotified = true;
@@ -136,7 +134,24 @@ async function sendEventNotification(event, channelId) {
                     value: `<t:${Math.floor(event.scheduledStartTimestamp / 1000)}:F>\n(<t:${Math.floor(event.scheduledStartTimestamp / 1000)}:R>)`,
                     inline: false
                 }
-            )
+            );
+
+        if (event.repeatRule) {
+            const frequencyText = {
+                DAILY: '매일',
+                WEEKLY: '매주',
+                MONTHLY: '매월',
+                YEARLY: '매년'
+            }[event.repeatRule.frequency] || '';
+
+            eventEmbed.addFields({
+                name: '🔄 반복 이벤트',
+                value: `${frequencyText} 반복되는 이벤트입니다`,
+                inline: false
+            });
+        }
+
+        eventEmbed
             .setURL(`https://discord.com/events/${event.guildId}/${event.id}`)
             .setFooter({ text: '이벤트에 참여하시려면 위 제목을 클릭하세요!' })
             .setTimestamp();
@@ -238,6 +253,22 @@ client.on(Events.GuildScheduledEventCreate, async scheduledEvent => {
             eventEmbed.addFields({
                     name: '📍 장소',
                     value: scheduledEvent.entityMetadata.location,
+                    inline: false
+                },
+                { name: '\u200B', value: '\u200B' });
+        }
+
+        if (scheduledEvent.repeatRule) {
+            const frequencyText = {
+                DAILY: '매일',
+                WEEKLY: '매주',
+                MONTHLY: '매월',
+                YEARLY: '매년'
+            }[scheduledEvent.repeatRule.frequency] || '';
+
+            eventEmbed.addFields({
+                    name: '🔄 반복 이벤트',
+                    value: `${frequencyText} 반복되는 이벤트입니다`,
                     inline: false
                 },
                 { name: '\u200B', value: '\u200B' });
