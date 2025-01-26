@@ -10,6 +10,16 @@ const client = new Client({
     ]
 });
 
+const weekdayText = {
+    0: '일요일',
+    1: '월요일',
+    2: '화요일',
+    3: '수요일',
+    4: '목요일',
+    5: '금요일',
+    6: '토요일'
+};
+
 const serverConfigs = new Map();
 const scheduledNotifications = new Map();
 
@@ -26,7 +36,26 @@ async function checkExistingEvents() {
         for (const [, guild] of client.guilds.cache) {
             console.log(`Checking guild: ${guild.name}`);
             const events = await guild.scheduledEvents.fetch();
+            console.log(`Found ${events.size} events in ${guild.name}`);
+
             events.forEach(event => {
+                console.log('Full event object:', {
+                    ...event,
+                    _rawData: event._rawData
+                });
+
+                console.log('Event details:', {
+                    name: event.name,
+                    id: event.id,
+                    startTime: event.scheduledStartTimestamp,
+                    recurrenceRule: event.recurrenceRule ? {
+                        frequency: event.recurrenceRule.frequency,
+                        count: event.recurrenceRule.count,
+                        byWeekday: event.recurrenceRule.byWeekday,
+                        interval: event.recurrenceRule.interval
+                    } : null
+                });
+
                 const timeUntilEvent = event.scheduledStartTimestamp - Date.now();
                 if (event.status !== 'COMPLETED' &&
                     timeUntilEvent > 900000 &&
@@ -49,9 +78,16 @@ async function checkExistingEvents() {
     }
 }
 
+
 client.on('guildCreate', async guild => {
+    console.log(`Bot joined new guild: ${guild.name}`);
     const events = await guild.scheduledEvents.fetch();
     events.forEach(event => {
+        console.log(`Found event in new guild:`, {
+            name: event.name,
+            repeatRule: event.repeatRule
+        });
+
         if (event.status !== 'COMPLETED' &&
             event.scheduledStartTimestamp > Date.now() &&
             !scheduledNotifications.has(event.id)) {
@@ -115,10 +151,12 @@ async function sendEventReminder(event, timeLeft) {
             content: `@everyone 잊지 마세요!`,
             embeds: [reminderEmbed]
         });
+        console.log(`Sent ${timeLeft} reminder for event: ${event.name}`);
     } catch (error) {
         console.error('Error sending event reminder:', error);
     }
 }
+
 
 async function sendEventNotification(event, channelId) {
     try {
@@ -136,17 +174,28 @@ async function sendEventNotification(event, channelId) {
                 }
             );
 
-        if (event.repeatRule) {
+        if (event.recurrenceRule) {
             const frequencyText = {
-                DAILY: '매일',
-                WEEKLY: '매주',
-                MONTHLY: '매월',
-                YEARLY: '매년'
-            }[event.repeatRule.frequency] || '';
+                1: '매일',
+                2: '매주',
+                3: '매월',
+                4: '매년'
+            }[event.recurrenceRule.frequency] || '';
+
+            let repeatText = `${frequencyText} `;
+
+            if (event.recurrenceRule.byWeekday && event.recurrenceRule.byWeekday.length > 0) {
+                const weekdays = event.recurrenceRule.byWeekday
+                    .map(day => weekdayText[day])
+                    .join(', ');
+                repeatText += `${weekdays}마다 `;
+            }
+
+            repeatText += '반복되는 이벤트입니다';
 
             eventEmbed.addFields({
-                name: '🔄 반복 이벤트',
-                value: `${frequencyText} 반복되는 이벤트입니다`,
+                name: '🔄 반복 설정',
+                value: repeatText,
                 inline: false
             });
         }
@@ -160,6 +209,7 @@ async function sendEventNotification(event, channelId) {
             content: '기존 이벤트 알림입니다 @everyone',
             embeds: [eventEmbed]
         });
+        console.log(`Sent notification for existing event: ${event.name}`);
     } catch (error) {
         console.error('Error sending existing event notification:', error);
     }
@@ -186,6 +236,7 @@ client.on('messageCreate', async message => {
                     .setTimestamp()
             ]
         });
+        console.log(`Set event channel for guild ${message.guild.name}: ${message.channel.name}`);
     }
 
     if (message.content === '!eventhelp') {
@@ -206,6 +257,19 @@ client.on('messageCreate', async message => {
 });
 
 client.on(Events.GuildScheduledEventCreate, async scheduledEvent => {
+    console.log('=== New Event Creation Detected ===');
+    console.log('Event Details:', {
+        name: scheduledEvent.name,
+        id: scheduledEvent.id,
+        startTime: new Date(scheduledEvent.scheduledStartTimestamp).toLocaleString(),
+        recurrenceRule: scheduledEvent.recurrenceRule ? {
+            frequency: scheduledEvent.recurrenceRule.frequency,
+            count: scheduledEvent.recurrenceRule.count,
+            byWeekday: scheduledEvent.recurrenceRule.byWeekday,
+            interval: scheduledEvent.recurrenceRule.interval
+        } : null
+    });
+
     const guildId = scheduledEvent.guildId;
     const channelId = serverConfigs.get(guildId);
 
@@ -216,6 +280,7 @@ client.on(Events.GuildScheduledEventCreate, async scheduledEvent => {
 
     try {
         const channel = await client.channels.fetch(channelId);
+        console.log(`Sending notification to channel: ${channel.name}`);
 
         const eventEmbed = new EmbedBuilder()
             .setColor('#5865F2')
@@ -249,26 +314,37 @@ client.on(Events.GuildScheduledEventCreate, async scheduledEvent => {
                 { name: '\u200B', value: '\u200B' });
         }
 
-        if (scheduledEvent.entityMetadata?.location) {
+        if (scheduledEvent.recurrenceRule) {
+            const frequencyText = {
+                1: '매일',
+                2: '매주',
+                3: '매월',
+                4: '매년'
+            }[scheduledEvent.recurrenceRule.frequency] || '';
+
+            let repeatText = `${frequencyText} `;
+
+            if (scheduledEvent.recurrenceRule.byWeekday && scheduledEvent.recurrenceRule.byWeekday.length > 0) {
+                const weekdays = scheduledEvent.recurrenceRule.byWeekday
+                    .map(day => weekdayText[day])
+                    .join(', ');
+                repeatText += `${weekdays}마다 `;
+            }
+
+            repeatText += '반복되는 이벤트입니다';
+
             eventEmbed.addFields({
-                    name: '📍 장소',
-                    value: scheduledEvent.entityMetadata.location,
+                    name: '🔄 반복 설정',
+                    value: repeatText,
                     inline: false
                 },
                 { name: '\u200B', value: '\u200B' });
         }
 
-        if (scheduledEvent.repeatRule) {
-            const frequencyText = {
-                DAILY: '매일',
-                WEEKLY: '매주',
-                MONTHLY: '매월',
-                YEARLY: '매년'
-            }[scheduledEvent.repeatRule.frequency] || '';
-
+        if (scheduledEvent.entityMetadata?.location) {
             eventEmbed.addFields({
-                    name: '🔄 반복 이벤트',
-                    value: `${frequencyText} 반복되는 이벤트입니다`,
+                    name: '📍 장소',
+                    value: scheduledEvent.entityMetadata.location,
                     inline: false
                 },
                 { name: '\u200B', value: '\u200B' });
@@ -284,13 +360,15 @@ client.on(Events.GuildScheduledEventCreate, async scheduledEvent => {
             embeds: [eventEmbed]
         });
 
+        console.log('Event notification sent successfully');
+
         scheduledNotifications.set(scheduledEvent.id, {
             fifteenMinNotified: false,
             fiveMinNotified: false
         });
 
     } catch (error) {
-        console.error('Error sending event notification:', error);
+        console.error('Error sending event notification:', error, error.stack);
     }
 });
 
