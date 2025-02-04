@@ -1,46 +1,81 @@
-const { Client, GatewayIntentBits, Events, EmbedBuilder } = require('discord.js');
+const { Client, GatewayIntentBits, Events, EmbedBuilder, PermissionsBitField } = require('discord.js');
 require('dotenv').config();
 
 const client = new Client({
-   intents: [
-       GatewayIntentBits.Guilds,
-       GatewayIntentBits.GuildScheduledEvents,
-       GatewayIntentBits.MessageContent,
-       GatewayIntentBits.GuildMessages
-   ]
+    intents: [
+        GatewayIntentBits.Guilds,
+        GatewayIntentBits.GuildScheduledEvents,
+        GatewayIntentBits.MessageContent,
+        GatewayIntentBits.GuildMessages
+    ]
 });
 
 const weekdayText = {
-   0: '일요일',
-   1: '월요일',
-   2: '화요일',
-   3: '수요일',
-   4: '목요일',
-   5: '금요일',
-   6: '토요일'
+    0: '일요일',
+    1: '월요일',
+    2: '화요일',
+    3: '수요일',
+    4: '목요일',
+    5: '금요일',
+    6: '토요일'
 };
 
 const serverConfigs = new Map();
 const scheduledNotifications = new Map();
 
-// 적절한 알림 채널을 자동으로 찾는 함수
-function findAnnouncementChannel(guild) {
-   // 시스템 채널 확인
-   if (guild.systemChannel) {
-       return guild.systemChannel;
-   }
+// 채널 찾기 함수 강화
+async function findAnnouncementChannel(guild) {
+    console.log(`Searching for announcement channel in ${guild.name}...`);
+    
+    try {
+        // 모든 채널 새로 fetch
+        await guild.channels.fetch();
+        
+        // 봇 멤버 정보 fetch
+        const botMember = await guild.members.fetchMe();
+        console.log(`Bot permissions in ${guild.name}:`, botMember.permissions.toArray());
 
-   // 채널 이름으로 찾기
-   return guild.channels.cache.find(channel => 
-       channel.type === 0 && // 텍스트 채널만
-       (
-           channel.name.includes('공지') ||
-           channel.name.includes('알림') ||
-           channel.name.includes('announcement') ||
-           channel.name.includes('notice') ||
-           channel.name.includes('notify')
-       )
-   );
+        // 채널 우선순위 설정
+        const channelPriorities = [
+            // 1순위: 시스템 채널
+            () => guild.systemChannel,
+            // 2순위: 공지/알림 채널
+            () => guild.channels.cache.find(channel => 
+                channel.type === 0 && 
+                channel.permissionsFor(botMember).has(PermissionsBitField.Flags.SendMessages) &&
+                (channel.name.includes('공지') || 
+                 channel.name.includes('알림') || 
+                 channel.name.includes('notice') || 
+                 channel.name.includes('announcement'))
+            ),
+            // 3순위: 일반 채널
+            () => guild.channels.cache.find(channel => 
+                channel.type === 0 && 
+                channel.permissionsFor(botMember).has(PermissionsBitField.Flags.SendMessages) &&
+                channel.name.includes('일반')
+            ),
+            // 4순위: 첫 번째 쓸 수 있는 텍스트 채널
+            () => guild.channels.cache.find(channel => 
+                channel.type === 0 && 
+                channel.permissionsFor(botMember).has(PermissionsBitField.Flags.SendMessages)
+            )
+        ];
+
+        for (const findChannel of channelPriorities) {
+            const channel = findChannel();
+            if (channel) {
+                console.log(`Found suitable channel in ${guild.name}: #${channel.name}`);
+                return channel;
+            }
+        }
+
+        console.log(`No suitable channel found in ${guild.name}`);
+        return null;
+
+    } catch (error) {
+        console.error(`Error finding announcement channel in ${guild.name}:`, error);
+        return null;
+    }
 }
 
 client.once('ready', async () => {
@@ -48,18 +83,91 @@ client.once('ready', async () => {
    console.log('Bot is ready to use!');
    
    // 모든 서버의 알림 채널 자동 설정
-   client.guilds.cache.forEach(guild => {
-       const announcementChannel = findAnnouncementChannel(guild);
-       if (announcementChannel) {
-           serverConfigs.set(guild.id, announcementChannel.id);
-           console.log(`Auto-configured channel for ${guild.name}: ${announcementChannel.name}`);
-       } else {
-           console.log(`Could not find suitable announcement channel for ${guild.name}`);
+   for (const [, guild] of client.guilds.cache) {
+       try {
+           const announcementChannel = await findAnnouncementChannel(guild);
+           if (announcementChannel) {
+               serverConfigs.set(guild.id, announcementChannel.id);
+               console.log(`Auto-configured channel for ${guild.name}: #${announcementChannel.name}`);
+               
+               await announcementChannel.send({
+                   embeds: [
+                       new EmbedBuilder()
+                           .setColor('#00ff00')
+                           .setTitle('✅ 이벤트 알림 채널 자동 설정')
+                           .setDescription('이 채널이 이벤트 알림 채널로 자동 설정되었습니다.')
+                           .addFields(
+                               { name: '채널', value: `<#${announcementChannel.id}>` },
+                               { name: '변경 방법', value: '다른 채널에서 `!seteventchannel` 명령어를 사용하여 변경할 수 있습니다.' }
+                           )
+                           .setTimestamp()
+                   ]
+               });
+           }
+       } catch (error) {
+           console.error(`Error setting up guild ${guild.name}:`, error);
        }
-   });
+   }
 
    checkExistingEvents();
    checkUpcomingEvents();
+});
+
+client.on('guildCreate', async guild => {
+   console.log(`Bot joined new guild: ${guild.name}`);
+   try {
+       // 새로운 길드 정보 fetch
+       await guild.fetch();
+       
+       // 알림 채널 자동 설정
+       const announcementChannel = await findAnnouncementChannel(guild);
+       if (announcementChannel) {
+           serverConfigs.set(guild.id, announcementChannel.id);
+           console.log(`Auto-configured channel for new guild ${guild.name}: #${announcementChannel.name}`);
+           
+           try {
+               await announcementChannel.send({
+                   embeds: [
+                       new EmbedBuilder()
+                           .setColor('#00ff00')
+                           .setTitle('✅ 이벤트 알림 봇 초대 완료')
+                           .setDescription('이벤트 알림 봇이 서버에 추가되었습니다.')
+                           .addFields(
+                               { name: '알림 채널', value: `이 채널(<#${announcementChannel.id}>)이 이벤트 알림 채널로 자동 설정되었습니다.` },
+                               { name: '변경 방법', value: '다른 채널에서 `!seteventchannel` 명령어를 사용하여 변경할 수 있습니다.' },
+                               { name: '도움말', value: '`!eventhelp` 명령어로 자세한 사용법을 확인할 수 있습니다.' }
+                           )
+                           .setTimestamp()
+                   ]
+               });
+               console.log(`Sent welcome message to ${guild.name}`);
+           } catch (error) {
+               console.error(`Error sending welcome message to ${guild.name}:`, error);
+           }
+       }
+
+       // 기존 이벤트 체크
+       const events = await guild.scheduledEvents.fetch();
+       console.log(`Found ${events.size} existing events in ${guild.name}`);
+       
+       events.forEach(event => {
+           if (event.status !== 'COMPLETED' &&
+               event.scheduledStartTimestamp > Date.now() &&
+               !scheduledNotifications.has(event.id)) {
+               scheduledNotifications.set(event.id, {
+                   fifteenMinNotified: false,
+                   fiveMinNotified: false
+               });
+               
+               // 기존 이벤트에 대한 알림 전송
+               if (announcementChannel) {
+                   sendEventNotification(event, announcementChannel.id);
+               }
+           }
+       });
+   } catch (error) {
+       console.error(`Error setting up new guild ${guild.name}:`, error);
+   }
 });
 
 async function checkExistingEvents() {
@@ -109,48 +217,6 @@ async function checkExistingEvents() {
        console.error('Error checking existing events:', error, error.stack);
    }
 }
-
-client.on('guildCreate', async guild => {
-   console.log(`Bot joined new guild: ${guild.name}`);
-   
-   // 알림 채널 자동 설정
-   const announcementChannel = findAnnouncementChannel(guild);
-   if (announcementChannel) {
-       serverConfigs.set(guild.id, announcementChannel.id);
-       console.log(`Auto-configured channel for new guild ${guild.name}: ${announcementChannel.name}`);
-       
-       // 설정 완료 알림 전송
-       try {
-           await announcementChannel.send({
-               embeds: [
-                   new EmbedBuilder()
-                       .setColor('#00ff00')
-                       .setTitle('✅ 이벤트 알림 채널 자동 설정')
-                       .setDescription('이 채널이 이벤트 알림 채널로 자동 설정되었습니다.')
-                       .addFields(
-                           { name: '채널', value: `<#${announcementChannel.id}>` },
-                           { name: '변경 방법', value: '다른 채널에서 `!seteventchannel` 명령어를 사용하여 변경할 수 있습니다.' }
-                       )
-                       .setTimestamp()
-               ]
-           });
-       } catch (error) {
-           console.error(`Error sending auto-config notification: ${error}`);
-       }
-   }
-
-   const events = await guild.scheduledEvents.fetch();
-   events.forEach(event => {
-       if (event.status !== 'COMPLETED' &&
-           event.scheduledStartTimestamp > Date.now() &&
-           !scheduledNotifications.has(event.id)) {
-           scheduledNotifications.set(event.id, {
-               fifteenMinNotified: false,
-               fiveMinNotified: false
-           });
-       }
-   });
-});
 
 function checkUpcomingEvents() {
    setInterval(async () => {
@@ -215,7 +281,7 @@ async function sendEventNotification(event, channelId) {
        const channel = await client.channels.fetch(channelId);
        const eventEmbed = new EmbedBuilder()
            .setColor('#5865F2')
-           .setTitle('🎉 기존 이벤트 알림')
+           .setTitle('🎉 이벤트 알림')
            .setDescription(`# ${event.name}\n\n`)
            .addFields(
                { name: '\u200B', value: '\u200B' },
@@ -252,18 +318,34 @@ async function sendEventNotification(event, channelId) {
            });
        }
 
+       if (event.description) {
+           eventEmbed.addFields({
+               name: '📝 설명',
+               value: event.description,
+               inline: false
+           });
+       }
+
+       if (event.entityMetadata?.location) {
+           eventEmbed.addFields({
+               name: '📍 장소',
+               value: event.entityMetadata.location,
+               inline: false
+           });
+       }
+
        eventEmbed
            .setURL(`https://discord.com/events/${event.guildId}/${event.id}`)
            .setFooter({ text: '이벤트에 참여하시려면 위 제목을 클릭하세요!' })
            .setTimestamp();
 
        await channel.send({
-           content: '기존 이벤트 알림입니다 @everyone',
+           content: '@everyone',
            embeds: [eventEmbed]
        });
-       console.log(`Sent notification for existing event: ${event.name}`);
+       console.log(`Sent notification for event: ${event.name}`);
    } catch (error) {
-       console.error('Error sending existing event notification:', error);
+       console.error('Error sending event notification:', error);
    }
 }
 
@@ -288,7 +370,7 @@ client.on('messageCreate', async message => {
                    .setTimestamp()
            ]
        });
-       console.log(`Set event channel for guild ${message.guild.name}: ${message.channel.name}`);
+       console.log(`Set event channel for guild ${message.guild.name}: #${message.channel.name}`);
    }
 
    if (message.content === '!eventhelp') {
@@ -299,6 +381,7 @@ client.on('messageCreate', async message => {
                    .setTitle('📚 이벤트 봇 도움말')
                    .setDescription('이벤트 알림 봇 사용 방법입니다.')
                    .addFields(
+                       { name: '자동 설정', value: '봇이 서버에 참여하면 자동으로 공지/알림 채널을 찾아 설정합니다.', inline: false },
                        { name: '!seteventchannel', value: '현재 채널을 이벤트 알림 채널로 설정합니다.\n(서버 관리 권한 필요)', inline: false },
                        { name: '자동 알림', value: '• 새 이벤트 생성 시 알림\n• 이벤트 시작 15분 전 알림\n• 이벤트 시작 5분 전 알림', inline: false }
                    )
@@ -313,6 +396,7 @@ client.on(Events.GuildScheduledEventCreate, async scheduledEvent => {
    console.log('Event Details:', {
        name: scheduledEvent.name,
        id: scheduledEvent.id,
+       guildId: scheduledEvent.guildId,
        startTime: new Date(scheduledEvent.scheduledStartTimestamp).toLocaleString(),
        recurrenceRule: scheduledEvent.recurrenceRule ? {
            frequency: scheduledEvent.recurrenceRule.frequency,
@@ -323,14 +407,16 @@ client.on(Events.GuildScheduledEventCreate, async scheduledEvent => {
    });
 
    const guildId = scheduledEvent.guildId;
-   const channelId = serverConfigs.get(guildId);
+   let channelId = serverConfigs.get(guildId);
 
+   // 채널이 설정되어 있지 않으면 자동 설정 시도
    if (!channelId) {
        const guild = await client.guilds.fetch(guildId);
-       const announcementChannel = findAnnouncementChannel(guild);
+       const announcementChannel = await findAnnouncementChannel(guild);
        if (announcementChannel) {
-           serverConfigs.set(guildId, announcementChannel.id);
-           console.log(`Auto-configured channel for guild ${guild.name}: ${announcementChannel.name}`);
+           channelId = announcementChannel.id;
+           serverConfigs.set(guildId, channelId);
+           console.log(`Auto-configured channel for guild ${guild.name}: #${announcementChannel.name}`);
        } else {
            console.log(`No event channel set for guild ${guildId}`);
            return;
@@ -339,93 +425,18 @@ client.on(Events.GuildScheduledEventCreate, async scheduledEvent => {
 
    try {
        const channel = await client.channels.fetch(channelId);
-       console.log(`Sending notification to channel: ${channel.name}`);
+       console.log(`Sending notification to channel: #${channel.name}`);
 
-       const eventEmbed = new EmbedBuilder()
-           .setColor('#5865F2')
-           .setTitle('🎉 새로운 이벤트가 등록되었습니다!')
-           .setDescription(`# ${scheduledEvent.name}\n\n`)
-           .addFields(
-               { name: '\u200B', value: '\u200B' },
-               {
-                   name: '📅 시작 시간',
-                   value: `<t:${Math.floor(scheduledEvent.scheduledStartTimestamp / 1000)}:F>\n(<t:${Math.floor(scheduledEvent.scheduledStartTimestamp / 1000)}:R>)`,
-                   inline: false
-               },
-               { name: '\u200B', value: '\u200B' }
-           );
+       // 이벤트 알림 전송
+       await sendEventNotification(scheduledEvent, channelId);
 
-       if (scheduledEvent.scheduledEndTimestamp) {
-           eventEmbed.addFields({
-                   name: '⏰ 종료 시간',
-                   value: `<t:${Math.floor(scheduledEvent.scheduledEndTimestamp / 1000)}:F>`,
-                   inline: false
-               },
-               { name: '\u200B', value: '\u200B' });
-       }
-
-       if (scheduledEvent.description) {
-           eventEmbed.addFields({
-                   name: '📝 설명',
-                   value: scheduledEvent.description,
-                   inline: false
-               },
-{ name: '\u200B', value: '\u200B' });
-       }
-
-       if (scheduledEvent.recurrenceRule) {
-           const frequencyText = {
-               1: '매일',
-               2: '매주',
-               3: '매월',
-               4: '매년'
-           }[scheduledEvent.recurrenceRule.frequency] || '';
-
-           let repeatText = `${frequencyText} `;
-
-           if (scheduledEvent.recurrenceRule.byWeekday && scheduledEvent.recurrenceRule.byWeekday.length > 0) {
-               const weekdays = scheduledEvent.recurrenceRule.byWeekday
-                   .map(day => weekdayText[day])
-                   .join(', ');
-               repeatText += `${weekdays}마다 `;
-           }
-
-           repeatText += '반복되는 이벤트입니다';
-
-           eventEmbed.addFields({
-                   name: '🔄 반복 설정',
-                   value: repeatText,
-                   inline: false
-               },
-               { name: '\u200B', value: '\u200B' });
-       }
-
-       if (scheduledEvent.entityMetadata?.location) {
-           eventEmbed.addFields({
-                   name: '📍 장소',
-                   value: scheduledEvent.entityMetadata.location,
-                   inline: false
-               },
-               { name: '\u200B', value: '\u200B' });
-       }
-
-       eventEmbed
-           .setURL(`https://discord.com/events/${scheduledEvent.guildId}/${scheduledEvent.id}`)
-           .setFooter({ text: '이벤트에 참여하시려면 위 제목을 클릭하세요!' })
-           .setTimestamp();
-
-       await channel.send({
-           content: '새로운 이벤트가 등록되었습니다! @everyone',
-           embeds: [eventEmbed]
-       });
-
-       console.log('Event notification sent successfully');
-
+       // 알림 예약
        scheduledNotifications.set(scheduledEvent.id, {
            fifteenMinNotified: false,
            fiveMinNotified: false
        });
 
+       console.log('Event notification sent successfully');
    } catch (error) {
        console.error('Error sending event notification:', error, error.stack);
    }
